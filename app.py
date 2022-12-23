@@ -2,7 +2,7 @@ import os
 
 from flask import Flask, render_template, request, flash, redirect, session, g
 from flask_debugtoolbar import DebugToolbarExtension
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, NoResultFound
 
 from forms import UserAddForm, LoginForm, MessageForm, UserEditForm
 from models import db, connect_db, User, Message, Likes
@@ -181,19 +181,16 @@ def users_followers(user_id):
     return render_template('users/followers.html', user=user)
 
 
-@app.route('/users/follow/<int:follow_id>', methods=['POST'])
-def add_follow(follow_id):
-    """Add a follow for the currently-logged-in user."""
+@app.route('/users/<int:user_id>/likes')
+def users_likes(user_id):
+    """Show list of likes for the user."""
 
     if not g.user:
         flash("Access unauthorized.", "danger")
         return redirect("/")
 
-    followed_user = User.query.get_or_404(follow_id)
-    g.user.following.append(followed_user)
-    db.session.commit()
-
-    return redirect(f"/users/{g.user.id}/following")
+    user = User.query.get_or_404(user_id)
+    return render_template('users/likes.html', user=user)
 
 
 @app.route('/users/add_like/<int:msg_id>', methods=["POST"])
@@ -204,12 +201,30 @@ def add_like(msg_id):
         flash("Access unauthorized.", "danger")
         return redirect("/")
 
-    new_like = Likes(user_id = g.user.id, message_id=msg_id)
-    db.session.add(new_like)
+    try:
+        current_like_attempt = Likes.query.filter(Likes.message_id.in_([msg_id])).one()
+        db.session.delete(current_like_attempt)
+        db.session.commit()
+        return redirect('/')
+    except NoResultFound:
+        new_like = Likes(user_id = g.user.id, message_id=msg_id)
+        db.session.add(new_like)
+        db.session.commit()
+        return redirect('/')
+        
+
+@app.route('/users/<int:user_id>/delete_like/<int:msg_id>', methods=["POST"])
+def delete_like(user_id, msg_id):
+    """Add a like for the currently-logged-in user."""
+
+    if not g.user:
+        flash("Access unauthorized.", "danger")
+        return redirect("/")
+
+    current_like_attempt = Likes.query.filter(Likes.message_id.in_([msg_id])).one()
+    db.session.delete(current_like_attempt)
     db.session.commit()
-
-    return redirect('/')
-
+    return redirect(f'/users/{user_id}/likes')
 
 
 @app.route('/users/stop-following/<int:follow_id>', methods=['POST'])
@@ -336,6 +351,7 @@ def homepage():
 
     if g.user:
         following_and_user = [f.id for f in g.user.following] + [g.user.id]
+        current_liked_message_ids = [l.id for l in g.user.likes]
 
         messages = (Message
                     .query
@@ -344,7 +360,8 @@ def homepage():
                     .limit(100)
                     .all())
 
-        return render_template('home.html', messages=messages)
+
+        return render_template('home.html', messages=messages, likes=current_liked_message_ids)
 
     else:
         return render_template('home-anon.html')
